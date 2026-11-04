@@ -1724,7 +1724,8 @@ function Invoke-Request($req) {
 
       if ($mode -eq 'physical') {
         [DshInput]::PhysicalClick($x, $y, ($button -eq 'right'), $count)
-        Show-StateAt 'cross' $x $y
+        # 物理输入已经动了真实光标；不要把 AI 光标压在同一个点上，否则两套光标叠着会闪。
+        [DshOverlay]::Hide()
         return @{ ok = $true; via = 'physical'; note = '物理输入完成，光标已还原' }
       }
 
@@ -1753,7 +1754,7 @@ function Invoke-Request($req) {
           $f = Set-UiaFocus $px $py
           if ($f.ok) {
             [DshInput]::PhysicalText($text)
-            Show-StateAt 'text' $px $py
+            [DshOverlay]::Hide()
             return @{ ok = $true; via = 'uia-focus+physical'; pattern = 'Focus'; name = $f.name; type = $f.type; note = 'UIA 聚焦后用独立键盘输入，未移动鼠标' }
           }
           # 老式 WinForms / 原生控件常常只有 MSAA，没有 UIA Value/Focus。
@@ -1816,7 +1817,7 @@ function Invoke-Request($req) {
         } finally {
           if ($prev -ne [IntPtr]::Zero) { [DshInput]::FocusWindow($prev) | Out-Null }
         }
-        if ($hasPoint) { Show-StateAt 'text' ([int]$req.x) ([int]$req.y) } else { $script:cursorStyle = 'text'; [DshOverlay]::SetStyle('text') }
+        if ($hasPoint) { [DshOverlay]::Hide() } else { $script:cursorStyle = 'text'; [DshOverlay]::SetStyle('text') }
         return @{ ok = $true; via = 'physical'; note = '物理键盘输入完成' }
       }
 
@@ -1880,7 +1881,7 @@ function Invoke-Request($req) {
       }
       if ($mode -eq 'physical') {
         [DshInput]::PhysicalScroll($x, $y, $delta)
-        Show-StateAt 'vert' $x $y
+        [DshOverlay]::Hide()
         return @{ ok = $true; via = 'physical'; delta = $delta; note = '物理滚轮完成，光标已还原' }
       }
       Show-StateAt 'help' $x $y
@@ -1915,7 +1916,7 @@ function Invoke-Request($req) {
       }
       if ($mode -eq 'physical') {
         [DshInput]::PhysicalDrag($x1, $y1, $x2, $y2, $duration)
-        Show-StateAt $dragState $x2 $y2
+        [DshOverlay]::Hide()
         return @{ ok = $true; via = 'physical'; note = '物理拖拽完成，光标已还原' }
       }
       Show-StateAt 'help' $x2 $y2
