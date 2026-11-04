@@ -1,0 +1,8 @@
+node_modules/
+test/testapp.log
+test/testapp.json
+*.zip
+*.bak-*
+settings.json
+.DS_Store
+Thumbs.db

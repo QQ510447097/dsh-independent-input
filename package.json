@@ -1,0 +1,45 @@
+{
+  "name": "dsh-independent-input",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "独立鼠标键盘：默认用 UIA / 窗口消息操作桌面，不移动主人的真实光标、不抢焦点；物理输入回退，主人一碰就暂停。",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./sidecar.ps1": "./sidecar.ps1",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib",
+    "assets",
+    "sidecar.ps1",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "computer-use",
+    "input",
+    "uia",
+    "windows"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "license": "MIT"
+}
