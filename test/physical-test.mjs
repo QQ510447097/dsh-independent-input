@@ -55,36 +55,22 @@ try {
 
   const before = await sc.request('status')
   const phys = await sc.request('click', { x: meta.button.x, y: meta.button.y, mode: 'physical' })
-  await sleep(500)
+  await sleep(350)
   const after = await sc.request('status')
-  check('physical click ok', phys.ok === true, JSON.stringify(phys))
-  check('physical click landed', lines().includes('button'), JSON.stringify(lines()))
-  const dx = Math.abs(before.cursor.x - after.cursor.x)
-  const dy = Math.abs(before.cursor.y - after.cursor.y)
-  check('cursor restored', dx <= 8 && dy <= 8, `${JSON.stringify(before.cursor)} -> ${JSON.stringify(after.cursor)}`)
+  check('physical mouse refused', phys.ok === false && phys.reason === 'physical-mouse-forbidden', JSON.stringify(phys))
+  check('physical mouse did not click', !lines().includes('button'), JSON.stringify(lines()))
 
-  await sc.request('setUserActiveMs', { ms: 5000 })
-  await sc.request('simulateUserInput')
-  let allowedWhileActive = false
-  try {
-    const r = await sc.request('click', { x: meta.button.x, y: meta.button.y, mode: 'physical' })
-    allowedWhileActive = r.ok === true
-  } catch (e) {
-    allowedWhileActive = false
-    console.log('physical while active error:', e.message)
-  }
-  check('physical allowed while user active', allowedWhileActive)
-  await sc.request('setUserActiveMs', { ms: 0 })
-
-  // 用消息点击把焦点放进文本框（不移动光标），再用物理键盘输入。
-  await sc.request('click', { x: meta.textbox.x, y: meta.textbox.y, mode: 'message' })
-  await sleep(250)
+  const fgBefore = (await sc.request('status')).foreground.hwnd
   const ty = await sc.request('type', { text: 'hello-physical', mode: 'physical', hwnd: meta.textboxHwnd })
-  await sleep(400)
-  check('physical type ok', ty.ok === true, JSON.stringify(ty))
-  await sc.request('click', { x: meta.read.x, y: meta.read.y, mode: 'uia' })
-  await sleep(400)
-  check('physical text landed', lines().some((l) => l.startsWith('text=hello-physical')), JSON.stringify(lines()))
+  check('physical keyboard refused', ty.ok === false && ty.reason === 'physical-keyboard-forbidden', JSON.stringify(ty))
+  const autoTy = await sc.request('type', { x: meta.textbox.x, y: meta.textbox.y, hwnd: meta.textboxHwnd, text: 'hello-auto', mode: 'auto', replace: true })
+  await sleep(350)
+  const fgAfter = (await sc.request('status')).foreground.hwnd
+  check('auto type ok', autoTy.ok === true, JSON.stringify(autoTy))
+  check('type did not steal focus', fgBefore === fgAfter, `${fgBefore} -> ${fgAfter}`)
+  await sc.request('click', { x: meta.read.x, y: meta.read.y, hwnd: meta.hwnd, mode: 'uia' })
+  await sleep(350)
+  check('auto type landed', lines().some((l) => l.startsWith('text=hello-auto')), JSON.stringify(lines()))
 
   await sc.request('pause')
   const paused = await sc.request('click', { x: meta.button.x, y: meta.button.y, mode: 'message' })

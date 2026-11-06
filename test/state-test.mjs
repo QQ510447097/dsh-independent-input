@@ -68,22 +68,22 @@ try {
   await sc.request('move', { x: meta.button.x, y: meta.button.y }, 10000)
   check('move state=pointer', (await dbg()) === 'pointer', await dbg())
 
-  const click = await sc.request('click', { x: meta.button.x, y: meta.button.y, mode: 'auto' }, 20000)
+  const click = await sc.request('click', { x: meta.button.x, y: meta.button.y, hwnd: meta.hwnd, mode: 'auto' }, 20000)
   const afterClick = await dbg()
   check('click succeeds', click.ok === true, JSON.stringify(click))
   check('click state=link', afterClick === 'link', afterClick)
 
-  const typed = await sc.request('type', { x: meta.textbox.x, y: meta.textbox.y, text: 'state', replace: true, mode: 'auto' }, 30000)
+  const typed = await sc.request('type', { x: meta.textbox.x, y: meta.textbox.y, hwnd: meta.textboxHwnd, text: 'state', replace: true, mode: 'auto' }, 30000)
   const afterType = await dbg()
   check('type succeeds', typed.ok === true, JSON.stringify(typed))
   check('type state=text', afterType === 'text', afterType)
 
-  const scroll = await sc.request('scroll', { x: meta.button.x, y: meta.button.y, delta: -120, mode: 'auto' }, 20000)
+  const scroll = await sc.request('scroll', { x: meta.button.x, y: meta.button.y, hwnd: meta.hwnd, delta: -120, mode: 'auto' }, 20000)
   const afterScroll = await dbg()
   check('scroll succeeds', scroll.ok === true, JSON.stringify(scroll))
   check('scroll state=vert', afterScroll === 'vert', afterScroll)
 
-  const drag = await sc.request('drag', { x: meta.button.x, y: meta.button.y, toX: meta.button.x + 60, toY: meta.button.y + 60, durationMs: 300, mode: 'auto' }, 30000)
+  const drag = await sc.request('drag', { x: meta.button.x, y: meta.button.y, hwnd: meta.hwnd, toX: meta.button.x + 60, toY: meta.button.y + 60, durationMs: 300, mode: 'auto' }, 30000)
   const afterDrag = await dbg()
   check('drag succeeds', drag.ok === true, JSON.stringify(drag))
   check('drag state=dgn1', afterDrag === 'dgn1', afterDrag)

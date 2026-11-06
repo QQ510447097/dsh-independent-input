@@ -2,7 +2,7 @@
   "name": "dsh-independent-input",
   "version": "0.2.0",
   "type": "module",
-  "description": "独立鼠标键盘：默认用 UIA / 窗口消息操作桌面，不移动主人的真实光标、不抢焦点；物理输入回退，physical 可与主人同时操作，只有 Ctrl+Alt+Q 手动暂停。",
+  "description": "独立鼠标键盘：目标 hwnd + UIA / 窗口消息，严格禁止真实鼠标和抢输入焦点；设置页总开关，关掉后不执行任何动作。",
   "main": "index.js",
   "exports": {
     ".": "./index.js",

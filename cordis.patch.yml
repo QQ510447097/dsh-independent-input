@@ -1,4 +1,5 @@
-# 独立鼠标键盘。默认 UIA / 窗口消息，不碰真实光标；物理输入是显式回退。
+# 独立鼠标键盘。默认 UIA / 窗口消息，严格不碰真实光标。
+# enabled: 总开关（默认 true）；true = 所有点击只用 AI 光标，click/scroll/drag 禁用 physical。
 # cursorMode: companion（陪伴，默认，AI 光标一直显示）
 #              clean（整洁，动作后 cursorHoldMs 毫秒自动收起）
 # cursorSize: AI 光标边长像素（24–192，默认 64）
@@ -8,6 +9,7 @@
     - id: independent-input
       name: dsh-independent-input
       config:
+        enabled: true
         cursorMode: companion
         cursorHoldMs: 2600
         cursorSize: 64

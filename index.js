@@ -141,15 +141,17 @@ function toolSpec() {
       '独立鼠标键盘：默认用 UIA / 窗口消息操作屏幕，**不移动主人的真实光标、不抢键盘焦点**，所以主人随时可以继续用鼠标键盘、暂停或提意见。\n\n'
       + '用法顺序：\n'
       + '1. 先 `status` 看是否 paused、前台窗口、真实光标位置；paused 就停手，等主人说继续。\n'
-      + '2. 用 `windows` 或 `capture` 拿目标坐标（屏幕绝对像素；`capture` 的图会直接附在结果里）。\n'
-      + '3. 用 `click` / `type` / `key` / `scroll` / `drag`，默认 `mode:"auto"`：UIA → 窗口消息；只有明确 `mode:"physical"` 才动用真实光标/键盘。\n'
+      + '2. 先用 `windows` 拿目标窗口 `hwnd`；再用 `capture` 拿坐标。\n'
+      + '3. 用 `click` / `type` / `key` / `scroll` / `drag`，**必须带目标 `hwnd`**，只用 `mode:"auto"`（目标窗口的 UIA / 窗口消息）；physical 全部禁用（会动真实鼠标 / 抢焦点）。\n'
       + '4. 每个动作后截图确认，不要假设点中了。\n\n'
+      + '总开关：设置 → 独立输入 里的「启用独立输入」。关闭时本工具不执行任何动作；开启时 AI 光标和主人的鼠标完全分开。\n\n'
       + 'AI 光标：开始操作时用 `move` 让它出现。两种模式 —— `companion`（陪伴，默认，一直显示到收工）'
       + '和 `clean`（整洁，动作后约 2.6 秒自动收起）。插件 config 里改 `cursorMode` / `cursorSize`（24–192，默认 64）；'
       + '光标外观按操作**自动切换**（默认 pointer、输入 text、可点元素 link、滚动 vert、拖拽 move/dgn1/dgn2、精确点击 cross、暂停 unavailiable、失败 help），不用手选。'
       + '运行中也可以 `overlay({cursorMode:"clean", cursorSize:96})` 切换；收工用 `overlay({show:false})` 收起。\n\n'
       + '安全规则：\n'
-      + '- 物理模式会短暂使用真实光标；**主人在用键鼠不会自动暂停**，只有显式暂停才停手。\n'
+      + '- 启用后 **严格禁止动用真实鼠标、严格禁止抢输入焦点**：所有动作只向目标 `hwnd` 发消息。\n'
+      + '- 主人在用键鼠不会自动暂停；只有显式暂停才停手。\n'
       + '- 主人按 **Ctrl+Alt+Q** 随时暂停；下一次动作会返回 paused，必须停下。\n'
       + '- 不要用这个工具做破坏性操作（删文件、关窗口、支付），除非主人明确要求。\n\n'
       + 'actions: status / windows / capture / click / type / key / scroll / drag / move / pause / resume / overlay。',
@@ -170,11 +172,11 @@ function toolSpec() {
       keys: { type: 'string', description: 'key：组合键，如 "ctrl+c"、"alt+tab"、"enter"' },
       mode: {
         type: 'string',
-        description: 'auto（默认）| uia | message | physical。auto 先 UIA 再窗口消息，不用真实光标；physical 才动用真实光标/键盘',
+        description: 'auto（默认）| uia | message；physical 已禁用（会动真实鼠标/抢焦点）',
       },
       delta: { type: 'number', description: 'scroll 滚轮量：正数向上、负数向下，默认 -120' },
       durationMs: { type: 'number', description: 'drag 持续时间，默认 400ms' },
-      hwnd: { type: 'number', description: '可选：type/key 的 physical 模式先聚焦这个窗口' },
+      hwnd: { type: 'number', description: '目标窗口句柄：click/scroll/drag/type/key 必填（先用 windows 拿 hwnd）；不传会拒绝，避免碰主人的窗口' },
       path: { type: 'string', description: 'capture 保存 PNG 的绝对路径；省略则自动放 ~/.dsh/independent-input/shots/' },
       rect: { type: 'string', description: 'capture 区域："x,y,w,h" 或 "full"；省略则截当前前台窗口' },
       show: { type: 'boolean', description: 'overlay：false 隐藏 AI 光标，true/省略 显示' },
@@ -217,6 +219,7 @@ function normalizeSettings(input, fallback = {}) {
   const hold = Number(merged.cursorHoldMs)
   const size = Number(merged.cursorSize)
   return {
+    enabled: typeof merged.enabled === 'boolean' ? merged.enabled : true,
     cursorMode: mode,
     cursorHoldMs: Number.isFinite(hold) ? Math.max(300, Math.min(10000, Math.round(hold))) : 2600,
     cursorSize: Number.isFinite(size) ? Math.max(24, Math.min(192, Math.round(size))) : 64,
@@ -282,6 +285,19 @@ export async function apply(ctx, rawConfig = {}) {
     async execute(args = {}) {
       const action = String(args.action || 'status').toLowerCase()
       try {
+        if (!current.enabled) {
+          return toLosslessJson({
+            text: '独立输入已关闭：请到 设置 → 独立输入 打开「启用独立输入」总开关。',
+            meta: { ok: false, enabled: false },
+          })
+        }
+        if ((action === 'click' || action === 'scroll' || action === 'drag' || action === 'type' || action === 'key')
+          && String(args.mode || '').toLowerCase() === 'physical') {
+          return toLosslessJson({
+            text: '严格禁止 physical：鼠标会动真实光标，键盘会抢焦点。请用 mode:"auto"（目标 hwnd + UIA / 窗口消息）。',
+            meta: { ok: false, strictNoRealMouse: true, strictNoFocusSteal: true, reason: 'physical-forbidden' },
+          })
+        }
         if (action === 'status') {
           const s = await engine.request('status', {}, 10000)
           return toLosslessJson({ text: statusText(s), meta: s })
@@ -339,7 +355,7 @@ export async function apply(ctx, rawConfig = {}) {
         }
         if (action === 'click') {
           const r = await engine.request('click', {
-            x: args.x, y: args.y, button: args.button, count: args.count, mode: args.mode,
+            x: args.x, y: args.y, button: args.button, count: args.count, mode: args.mode, hwnd: args.hwnd,
           }, 30000)
           return toLosslessJson({ text: resultText('click', r), meta: r })
         }
@@ -358,14 +374,14 @@ export async function apply(ctx, rawConfig = {}) {
         }
         if (action === 'scroll') {
           const r = await engine.request('scroll', {
-            x: args.x, y: args.y, delta: args.delta, mode: args.mode,
+            x: args.x, y: args.y, delta: args.delta, mode: args.mode, hwnd: args.hwnd,
           }, 30000)
           return toLosslessJson({ text: resultText('scroll', r), meta: r })
         }
         if (action === 'drag') {
           const r = await engine.request('drag', {
             x: args.x, y: args.y, toX: args.toX, toY: args.toY,
-            durationMs: args.durationMs, mode: args.mode,
+            durationMs: args.durationMs, mode: args.mode, hwnd: args.hwnd,
           }, 90000)
           return toLosslessJson({ text: resultText('drag', r), meta: r })
         }
@@ -388,6 +404,10 @@ export async function apply(ctx, rawConfig = {}) {
   const dispose = ctx.tools.register(defineTool(tool))
 
   const applySettings = async (next) => {
+    if (!next.enabled) {
+      engine.stop()
+      return
+    }
     await engine.setCursorSize(next.cursorSize)
     await engine.setCursorMode(next.cursorMode, next.cursorHoldMs)
   }
@@ -419,10 +439,12 @@ export async function apply(ctx, rawConfig = {}) {
         return json(res, 200, { ok: true, settings: current })
       }
       if (req.method === 'POST' && route === '/hide') {
+        if (!current.enabled) return json(res, 200, { ok: true, enabled: false })
         await engine.request('overlay', { show: false }, 15000)
         return json(res, 200, { ok: true })
       }
       if (req.method === 'POST' && route === '/show') {
+        if (!current.enabled) return json(res, 409, { ok: false, error: '独立输入已关闭，先在设置里启用总开关。' })
         await engine.request('overlay', { show: true }, 30000)
         return json(res, 200, { ok: true })
       }

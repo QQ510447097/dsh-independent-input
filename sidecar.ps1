@@ -245,6 +245,10 @@ public static class DshInput
     [DllImport("user32.dll")]
     public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
     [DllImport("user32.dll")]
+    public static extern bool IsWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern IntPtr ChildWindowFromPointEx(IntPtr hWnd, POINT pt, uint flags);
+    [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out RECT pvAttribute, int cbAttribute);
@@ -296,6 +300,7 @@ public static class DshInput
     public static volatile bool PhysicalActive = false;
     public static string PauseReason = "";
     public static int UserActiveMs = 800;
+    static bool AllowPhysicalMouse = false;
 
     static readonly object heldLock = new object();
     static readonly List<ushort> heldKeys = new List<ushort>();
@@ -595,6 +600,7 @@ public static class DshInput
 
     public static void PhysicalClick(int x, int y, bool right, int count)
     {
+        if (!AllowPhysicalMouse) throw new Exception("physical-mouse-forbidden");
         if (count < 1) count = 1;
         CheckReadyForPhysical();
         StartHooks();
@@ -687,6 +693,7 @@ public static class DshInput
 
     public static void PhysicalScroll(int x, int y, int delta)
     {
+        if (!AllowPhysicalMouse) throw new Exception("physical-mouse-forbidden");
         CheckReadyForPhysical();
         StartHooks();
         SaveCursor();
@@ -707,6 +714,7 @@ public static class DshInput
 
     public static void PhysicalDrag(int x1, int y1, int x2, int y2, int durationMs)
     {
+        if (!AllowPhysicalMouse) throw new Exception("physical-mouse-forbidden");
         CheckReadyForPhysical();
         StartHooks();
         SaveCursor();
@@ -775,6 +783,17 @@ public static class DshInput
         if (hwnd == IntPtr.Zero) return IntPtr.Zero;
         IntPtr root = GetAncestor(hwnd, (uint)GA_ROOT);
         return root == IntPtr.Zero ? hwnd : root;
+    }
+
+    public static IntPtr ChildAt(IntPtr hwnd, int screenX, int screenY)
+    {
+        if (hwnd == IntPtr.Zero) return IntPtr.Zero;
+        POINT p;
+        p.X = screenX;
+        p.Y = screenY;
+        if (!ScreenToClient(hwnd, ref p)) return hwnd;
+        IntPtr child = ChildWindowFromPointEx(hwnd, p, 0x0001 | 0x0002);
+        return child == IntPtr.Zero ? hwnd : child;
     }
 
     public static string WindowTitle(IntPtr hwnd)
@@ -1345,6 +1364,56 @@ function Invoke-UiaClick([int]$x, [int]$y) {
   return @{ ok = $false; reason = 'uia-no-pattern'; name = $name; type = $type }
 }
 
+function Invoke-UiaClickInWindow([IntPtr]$hwnd, [int]$x, [int]$y) {
+  if (-not $script:uia -or $hwnd -eq [IntPtr]::Zero) { return @{ ok = $false; reason = 'uia-no-window' } }
+  try {
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    if ($null -eq $root) { return @{ ok = $false; reason = 'uia-no-window' } }
+    $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+    $limit = [Math]::Min($all.Count, 4000)
+    for ($i = 0; $i -lt $limit; $i++) {
+      $cur = $all.Item($i)
+      try {
+        $r = $cur.Current.BoundingRectangle
+        if ($r.IsEmpty) { continue }
+        if ($x -lt $r.Left -or $x -gt $r.Right -or $y -lt $r.Top -or $y -gt $r.Bottom) { continue }
+      } catch { continue }
+      $n = Get-UiaName $cur
+      $t = Get-UiaType $cur
+      try {
+        $p = $cur.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+        $p.Invoke()
+        return @{ ok = $true; via = 'uia-hwnd'; pattern = 'Invoke'; name = $n; type = $t }
+      } catch { }
+      try {
+        $p = $cur.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
+        $p.Toggle()
+        return @{ ok = $true; via = 'uia-hwnd'; pattern = 'Toggle'; name = $n; type = $t }
+      } catch { }
+      try {
+        $p = $cur.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        $p.Select()
+        return @{ ok = $true; via = 'uia-hwnd'; pattern = 'Select'; name = $n; type = $t }
+      } catch { }
+    }
+  } catch { }
+  return @{ ok = $false; reason = 'uia-no-element' }
+}
+
+function Set-UiaTextInWindow([IntPtr]$hwnd, [string]$text, [bool]$replace) {
+  if (-not $script:uia -or $hwnd -eq [IntPtr]::Zero) { return @{ ok = $false; reason = 'uia-no-window' } }
+  try {
+    $el = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    if ($null -eq $el) { return @{ ok = $false; reason = 'uia-no-element' } }
+    $vp = $el.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    if ($replace) { $vp.SetValue($text) }
+    else { $vp.SetValue([string]$vp.Current.Value + $text) }
+    return @{ ok = $true; via = 'uia-hwnd'; pattern = 'Value'; name = (Get-UiaName $el); type = (Get-UiaType $el) }
+  } catch {
+    return @{ ok = $false; reason = 'uia-no-value' }
+  }
+}
+
 function Set-UiaText([int]$x, [int]$y, [string]$text, [bool]$replace) {
   $el = Get-UiaElementAt $x $y
   if ($null -eq $el) { return @{ ok = $false; reason = 'uia-no-element' } }
@@ -1652,6 +1721,50 @@ function Invoke-Request($req) {
       if ($null -ne $paused) { return $paused }
       [DshOverlay]::Hide()
 
+      if ($mode -eq 'physical') {
+        return @{
+          ok = $false; reason = 'physical-mouse-forbidden'; strictNoRealMouse = $true
+          note = '严格禁止动用真实鼠标；请改用 mode:"auto"（UIA / 窗口消息），不会移动主人的鼠标'
+        }
+      }
+
+      $targetHwnd = [long]$req.hwnd
+      if ($targetHwnd -eq 0) {
+        return @{
+          ok = $false; reason = 'need-target-hwnd'; strictNoRealMouse = $true
+          note = '必须提供目标窗口 hwnd（先用 windows 拿 hwnd）；只按坐标点会点到主人正在用的窗口'
+        }
+      }
+      $target = [IntPtr]$targetHwnd
+      if (-not [DshInput]::IsWindow($target)) {
+        return @{ ok = $false; reason = 'target-hwnd-invalid'; hwnd = $targetHwnd }
+      }
+      $root = [DshInput]::RootOf($target)
+      $r = Invoke-UiaClickInWindow $root $x $y
+      if ($r.ok) {
+        $state = if ($r.pattern -and ([string]$r.type -match 'Edit|Document|Text')) { 'text' } elseif ($r.pattern) { 'link' } else { 'pointer' }
+        Show-StateAt $state $x $y
+        $r['x'] = $x
+        $r['y'] = $y
+        $r['hwnd'] = [long]$root
+        $r['button'] = $button
+        $r['count'] = $count
+        return $r
+      }
+      $h = [DshInput]::ChildAt($root, $x, $y)
+      if ($h -eq [IntPtr]::Zero) { $h = $root }
+      [DshInput]::PostMouseClick($h, $x, $y, ($button -eq 'right'), $count)
+      $cls = [DshInput]::WindowClass($h)
+      $state2 = 'pointer'
+      if ($cls -match 'BUTTON|Button|SysLink|Toolbar|Menu') { $state2 = 'link' }
+      elseif ($cls -match 'EDIT|Edit|TextBox') { $state2 = 'text' }
+      Show-StateAt $state2 $x $y
+      return @{
+        ok = $true; via = 'message-hwnd'; hwnd = [long]$h; target = [long]$root
+        className = $cls; verified = $false
+        note = '已投递给指定窗口；不移动真实鼠标，也不经过别的窗口'
+      }
+
       $fallbackState = 'pointer'
       $r = $null
       if ($mode -eq 'uia' -or $mode -eq 'auto') {
@@ -1696,16 +1809,16 @@ function Invoke-Request($req) {
       }
 
       if ($mode -eq 'physical') {
-        [DshInput]::PhysicalClick($x, $y, ($button -eq 'right'), $count)
-        # 物理输入已经动了真实光标；不要把 AI 光标压在同一个点上，否则两套光标叠着会闪。
-        [DshOverlay]::Hide()
-        return @{ ok = $true; via = 'physical'; note = '物理输入完成，光标已还原' }
+        return @{
+          ok = $false; reason = 'physical-mouse-forbidden'; strictNoRealMouse = $true
+          note = '严格禁止动用真实鼠标；请改用 mode:"auto"（UIA / 窗口消息），不会移动主人的鼠标'
+        }
       }
 
       Show-StateAt 'help' $x $y
       return @{
-        ok = $false; reason = 'no-route'; needsPhysical = $true
-        note = 'UIA 与窗口消息都没成功；如果必须物理点击，明确传 mode:"physical"'
+        ok = $false; reason = 'no-route'; needsPhysical = $false; strictNoRealMouse = $true
+        note = 'UIA 与窗口消息都没成功；严格禁止用真实鼠标，改用其他不碰鼠标的方式或问主人'
       }
     }
     'type' {
@@ -1718,84 +1831,52 @@ function Invoke-Request($req) {
       if ($null -ne $paused) { return $paused }
       [DshOverlay]::Hide()
 
-      if ($mode -eq 'uia' -or $mode -eq 'auto') {
-        if ($hasPoint) {
-          $px = [int]$req.x
-          $py = [int]$req.y
-          $r = Set-UiaText $px $py $text $replace
-          if ($r.ok) { Show-StateAt 'text' $px $py; return $r }
-          $f = Set-UiaFocus $px $py
-          if ($f.ok) {
-            [DshInput]::PhysicalText($text)
-            [DshOverlay]::Hide()
-            return @{ ok = $true; via = 'uia-focus+physical'; pattern = 'Focus'; name = $f.name; type = $f.type; note = 'UIA 聚焦后用独立键盘输入，未移动鼠标' }
-          }
-          # 老式 WinForms / 原生控件常常只有 MSAA，没有 UIA Value/Focus。
-          # 先试 WM_SETTEXT（对 Edit 控件最稳，不需要聚焦、不碰光标）。
-          $h = [DshInput]::WindowAt($px, $py)
-          if ($h -ne [IntPtr]::Zero) {
-            $cls = [DshInput]::WindowClass($h)
-            if ($cls -match 'EDIT|Edit|TextBox') {
-              $cur = [DshInput]::GetWindowText($h)
-              $want = if ($replace) { $text } else { $cur + $text }
-              [DshInput]::SetTextMessage($h, $want) | Out-Null
-              Start-Sleep -Milliseconds 60
-              $now = [DshInput]::GetWindowText($h)
-              Show-StateAt 'text' $px $py
-              if ($now -eq $want) {
-                return @{ ok = $true; via = 'wm_settext'; hwnd = [long]$h; verified = $true; note = '直接写入 Edit 控件，未移动光标、未抢焦点' }
-              }
-            }
-            [DshInput]::PostMouseClick($h, $px, $py, $false, 1)
-            Start-Sleep -Milliseconds 90
-            $fh = [DshInput]::GetFocusWindow()
-            [DshInput]::PostText($fh, $text)
-            Show-StateAt 'text' $px $py
-            return @{ ok = $true; via = 'uia+message'; hwnd = [long]$fh; verified = $false; note = 'UIA 无 Value/Focus，已改用窗口消息聚焦并输入；请截图确认' }
-          }
-          if ($mode -eq 'uia') { return @{ ok = $false; reason = 'no-window' } }
-        } elseif ($mode -eq 'uia') {
-          return @{ ok = $false; reason = 'need-point' }
-        }
-      }
-
-      if ($mode -eq 'message' -or $mode -eq 'auto' -or $mode -eq 'uia') {
-        if ($hasPoint) {
-          $h = [DshInput]::WindowAt([int]$req.x, [int]$req.y)
-          if ($h -ne [IntPtr]::Zero -and ([DshInput]::WindowClass($h) -match 'EDIT|Edit|TextBox')) {
-            $cur = [DshInput]::GetWindowText($h)
-            $want = if ($replace) { $text } else { $cur + $text }
-            [DshInput]::SetTextMessage($h, $want) | Out-Null
-            Start-Sleep -Milliseconds 50
-            $now = [DshInput]::GetWindowText($h)
-            if ($now -eq $want) {
-              Show-StateAt 'text' ([int]$req.x) ([int]$req.y)
-              return @{ ok = $true; via = 'wm_settext'; hwnd = [long]$h; verified = $true; note = '直接写入 Edit 控件，未移动光标、未抢焦点' }
-            }
-          }
-        }
-        $h = [DshInput]::GetFocusWindow()
-        [DshInput]::PostText($h, $text)
-        if ($hasPoint) { Show-StateAt 'text' ([int]$req.x) ([int]$req.y) } else { $script:cursorStyle = 'text'; [DshOverlay]::SetStyle('text') }
-        return @{ ok = $true; via = 'message'; hwnd = [long]$h; verified = $false; note = 'WM_CHAR 已投递，请截图确认' }
-      }
-
       if ($mode -eq 'physical') {
-        $hwnd = [IntPtr]::Zero
-        if ($null -ne $req.hwnd) { $hwnd = [IntPtr][long]$req.hwnd }
-        $prev = [IntPtr]::Zero
-        if ($hwnd -ne [IntPtr]::Zero) { $prev = [DshInput]::FocusWindow($hwnd) }
-        try {
-          [DshInput]::PhysicalText($text)
-        } finally {
-          if ($prev -ne [IntPtr]::Zero) { [DshInput]::FocusWindow($prev) | Out-Null }
+        return @{
+          ok = $false; reason = 'physical-keyboard-forbidden'; strictNoFocusSteal = $true
+          note = '严格禁止抢输入焦点；physical 键盘会切前台，已禁用。请用 type 的 auto（UIA Value / 窗口消息）'
         }
-        if ($hasPoint) { [DshOverlay]::Hide() } else { $script:cursorStyle = 'text'; [DshOverlay]::SetStyle('text') }
-        return @{ ok = $true; via = 'physical'; note = '物理键盘输入完成' }
+      }
+      $targetHwnd = [long]$req.hwnd
+      if ($targetHwnd -eq 0) {
+        return @{
+          ok = $false; reason = 'need-target-hwnd'; strictNoFocusSteal = $true
+          note = '必须提供目标窗口 hwnd；不会把文字打进主人当前聚焦的输入框'
+        }
+      }
+      $target = [IntPtr]$targetHwnd
+      if (-not [DshInput]::IsWindow($target)) { return @{ ok = $false; reason = 'target-hwnd-invalid'; hwnd = $targetHwnd } }
+      $root = [DshInput]::RootOf($target)
+      $h = $root
+      if ($hasPoint) {
+        $child = [DshInput]::ChildAt($root, [int]$req.x, [int]$req.y)
+        if ($child -ne [IntPtr]::Zero) { $h = $child }
       }
 
-      if ($hasPoint) { Show-StateAt 'help' ([int]$req.x) ([int]$req.y) } else { $script:cursorStyle = 'help'; [DshOverlay]::SetStyle('help') }
-      return @{ ok = $false; reason = 'no-route' }
+      $cls = [DshInput]::WindowClass($h)
+      if ($cls -match 'EDIT|Edit|TextBox') {
+        $cur = [DshInput]::GetWindowText($h)
+        $want = if ($replace) { $text } else { $cur + $text }
+        [DshInput]::SetTextMessage($h, $want) | Out-Null
+        Start-Sleep -Milliseconds 60
+        $now = [DshInput]::GetWindowText($h)
+        if ($now -eq $want) {
+          if ($hasPoint) { Show-StateAt 'text' ([int]$req.x) ([int]$req.y) }
+          return @{ ok = $true; via = 'wm_settext'; hwnd = [long]$h; target = [long]$root; verified = $true; note = '直接写入目标 Edit 控件，未抢焦点、未移动鼠标' }
+        }
+      }
+
+      $r = Set-UiaTextInWindow $h $text $replace
+      if ($r.ok) {
+        if ($hasPoint) { Show-StateAt 'text' ([int]$req.x) ([int]$req.y) }
+        $r['hwnd'] = [long]$h
+        $r['target'] = [long]$root
+        return $r
+      }
+
+      [DshInput]::PostText($h, $text)
+      if ($hasPoint) { Show-StateAt 'text' ([int]$req.x) ([int]$req.y) }
+      return @{ ok = $true; via = 'message-hwnd'; hwnd = [long]$h; target = [long]$root; verified = $false; note = '已向目标窗口投递文字；不抢焦点' }
     }
     'key' {
       $mode = if ($req.mode) { [string]$req.mode } else { 'auto' }
@@ -1807,28 +1888,27 @@ function Invoke-Request($req) {
       $vks = @()
       foreach ($n in $names) { $vks += (Get-Vk $n) }
 
-      if ($mode -eq 'message') {
-        $h = [DshInput]::GetFocusWindow()
-        foreach ($vk in $vks) { [DshInput]::PostKey($h, [int]$vk, $true, $false, $false) }
-        [Array]::Reverse($vks)
-        foreach ($vk in $vks) { [DshInput]::PostKey($h, [int]$vk, $false, $false, $false) }
-        $script:cursorStyle = 'text'
-        [DshOverlay]::SetStyle('text')
-        return @{ ok = $true; via = 'message'; hwnd = [long]$h; keys = $raw; verified = $false; note = '按键消息已投递，请截图确认' }
+      if ($mode -eq 'physical') {
+        return @{
+          ok = $false; reason = 'physical-keyboard-forbidden'; strictNoFocusSteal = $true
+          note = '严格禁止抢输入焦点；physical 键盘会切前台，已禁用。请用 key 的 auto（窗口消息）'
+        }
       }
-
-      $hwnd = [IntPtr]::Zero
-      if ($null -ne $req.hwnd) { $hwnd = [IntPtr][long]$req.hwnd }
-      $prev = [IntPtr]::Zero
-      if ($hwnd -ne [IntPtr]::Zero) { $prev = [DshInput]::FocusWindow($hwnd) }
-      try {
-        [DshInput]::PhysicalKeySequence([uint16[]]$vks)
-      } finally {
-        if ($prev -ne [IntPtr]::Zero) { [DshInput]::FocusWindow($prev) | Out-Null }
+      $targetHwnd = [long]$req.hwnd
+      if ($targetHwnd -eq 0) {
+        return @{
+          ok = $false; reason = 'need-target-hwnd'; strictNoFocusSteal = $true
+          note = '必须提供目标窗口 hwnd；不会把按键打到主人当前聚焦的窗口'
+        }
       }
+      $h = [IntPtr]$targetHwnd
+      if (-not [DshInput]::IsWindow($h)) { return @{ ok = $false; reason = 'target-hwnd-invalid'; hwnd = $targetHwnd } }
+      foreach ($vk in $vks) { [DshInput]::PostKey($h, [int]$vk, $true, $false, $false) }
+      [Array]::Reverse($vks)
+      foreach ($vk in $vks) { [DshInput]::PostKey($h, [int]$vk, $false, $false, $false) }
       $script:cursorStyle = 'text'
       [DshOverlay]::SetStyle('text')
-      return @{ ok = $true; via = 'physical'; keys = $raw; note = '物理按键完成' }
+      return @{ ok = $true; via = 'message-hwnd'; hwnd = [long]$h; keys = $raw; verified = $false; note = '已向指定窗口投递按键；不抢焦点' }
     }
     'scroll' {
       $x = [int]$req.x
@@ -1839,26 +1919,27 @@ function Invoke-Request($req) {
       if ($null -ne $paused) { return $paused }
       [DshOverlay]::Hide()
 
-      if ($mode -eq 'uia' -or $mode -eq 'auto') {
-        $r = Invoke-UiaScroll $x $y $delta
-        if ($r.ok) { Show-StateAt 'vert' $x $y; return $r }
-      }
-      if ($mode -eq 'message' -or $mode -eq 'auto' -or $mode -eq 'uia') {
-        $h = [DshInput]::WindowAt($x, $y)
-        if ($h -ne [IntPtr]::Zero) {
-          [DshInput]::PostMouseScroll($h, $x, $y, $delta)
-          Show-StateAt 'vert' $x $y
-          return @{ ok = $true; via = 'message'; hwnd = [long]$h; delta = $delta; verified = $false; note = '滚轮消息已投递，请截图确认' }
-        }
-        if ($mode -eq 'message') { return @{ ok = $false; reason = 'no-window' } }
-      }
       if ($mode -eq 'physical') {
-        [DshInput]::PhysicalScroll($x, $y, $delta)
-        [DshOverlay]::Hide()
-        return @{ ok = $true; via = 'physical'; delta = $delta; note = '物理滚轮完成，光标已还原' }
+        return @{
+          ok = $false; reason = 'physical-mouse-forbidden'; strictNoRealMouse = $true
+          note = '严格禁止动用真实鼠标；滚轮请用 mode:"auto"（窗口消息）'
+        }
       }
-      Show-StateAt 'help' $x $y
-      return @{ ok = $false; reason = 'no-route'; needsPhysical = $true }
+      $targetHwnd = [long]$req.hwnd
+      if ($targetHwnd -eq 0) {
+        return @{
+          ok = $false; reason = 'need-target-hwnd'; strictNoRealMouse = $true
+          note = '必须提供目标窗口 hwnd；只按坐标滚动会滚到主人正在用的窗口'
+        }
+      }
+      $target = [IntPtr]$targetHwnd
+      if (-not [DshInput]::IsWindow($target)) { return @{ ok = $false; reason = 'target-hwnd-invalid'; hwnd = $targetHwnd } }
+      $root = [DshInput]::RootOf($target)
+      $h = [DshInput]::ChildAt($root, $x, $y)
+      if ($h -eq [IntPtr]::Zero) { $h = $root }
+      [DshInput]::PostMouseScroll($h, $x, $y, $delta)
+      Show-StateAt 'vert' $x $y
+      return @{ ok = $true; via = 'message-hwnd'; hwnd = [long]$h; target = [long]$root; delta = $delta; verified = $false; note = '已投递给指定窗口；不移动真实鼠标' }
     }
     'drag' {
       $x1 = [int]$req.x
@@ -1878,22 +1959,27 @@ function Invoke-Request($req) {
       if ($null -ne $paused) { return $paused }
       [DshOverlay]::Hide()
 
-      if ($mode -eq 'message' -or $mode -eq 'auto' -or $mode -eq 'uia') {
-        $h = [DshInput]::WindowAt($x1, $y1)
-        if ($h -ne [IntPtr]::Zero) {
-          [DshInput]::PostMouseDrag($h, $x1, $y1, $x2, $y2, [Math]::Max(8, [int]($duration / 20)))
-          Show-StateAt $dragState $x2 $y2
-          return @{ ok = $true; via = 'message'; hwnd = [long]$h; verified = $false; note = '拖拽消息已投递，请截图确认' }
-        }
-        if ($mode -eq 'message') { return @{ ok = $false; reason = 'no-window' } }
-      }
       if ($mode -eq 'physical') {
-        [DshInput]::PhysicalDrag($x1, $y1, $x2, $y2, $duration)
-        [DshOverlay]::Hide()
-        return @{ ok = $true; via = 'physical'; note = '物理拖拽完成，光标已还原' }
+        return @{
+          ok = $false; reason = 'physical-mouse-forbidden'; strictNoRealMouse = $true
+          note = '严格禁止动用真实鼠标；拖拽请用 mode:"auto"（窗口消息）'
+        }
       }
-      Show-StateAt 'help' $x2 $y2
-      return @{ ok = $false; reason = 'no-route'; needsPhysical = $true }
+      $targetHwnd = [long]$req.hwnd
+      if ($targetHwnd -eq 0) {
+        return @{
+          ok = $false; reason = 'need-target-hwnd'; strictNoRealMouse = $true
+          note = '必须提供目标窗口 hwnd；只按坐标拖拽会拖到主人正在用的窗口'
+        }
+      }
+      $target = [IntPtr]$targetHwnd
+      if (-not [DshInput]::IsWindow($target)) { return @{ ok = $false; reason = 'target-hwnd-invalid'; hwnd = $targetHwnd } }
+      $root = [DshInput]::RootOf($target)
+      $h = [DshInput]::ChildAt($root, $x1, $y1)
+      if ($h -eq [IntPtr]::Zero) { $h = $root }
+      [DshInput]::PostMouseDrag($h, $x1, $y1, $x2, $y2, [Math]::Max(8, [int]($duration / 20)))
+      Show-StateAt $dragState $x2 $y2
+      return @{ ok = $true; via = 'message-hwnd'; hwnd = [long]$h; target = [long]$root; verified = $false; note = '已投递给指定窗口；不移动真实鼠标' }
     }
     'capture' {
       $path = [string]$req.path

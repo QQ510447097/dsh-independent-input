@@ -135,6 +135,22 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const toggleEnabled = async () => {
+        if (!settings) return
+        const next = { ...settings, enabled: !settings.enabled }
+        setSettings(next)
+        setBusy(true); setError(''); setNote('')
+        try {
+          const data = await api('/settings', { method: 'POST', body: next })
+          applyResult(data)
+          setNote(next.enabled ? '已启用：之后所有点击只用 AI 光标，不碰真实鼠标。' : '已关闭：插件动作全部停用。')
+        } catch (e) {
+          setError(e.message)
+        } finally {
+          setBusy(false)
+        }
+      }
+
       const reset = async () => {
         const defaults = { cursorMode: 'companion', cursorHoldMs: 2600, cursorSize: 64 }
         setSettings((current) => current ? { ...current, ...defaults } : defaults)
@@ -189,6 +205,22 @@ window.__ModuleLoader__.load({
         h('div', { style: S.title }, '独立输入 · AI 光标'),
         h('div', { style: S.lead },
           '这里调 AI 光标的显示方式和大小；外观会像正常鼠标一样，按当前操作自动切换。默认不移动你的真实光标、不抢键盘焦点，保存后立即生效。'),
+
+        h('div', { style: S.card },
+          h('div', { style: S.title }, '总开关'),
+          h('div', { style: S.hint },
+            settings.enabled
+              ? '已启用：所有点击只用 AI 光标（UIA / 窗口消息），严格禁止动用真实鼠标。'
+              : '已关闭：插件不执行任何动作，也不会显示 AI 光标。'),
+          h('div', { style: S.row },
+            h('button', {
+              type: 'button',
+              style: S.modeBtn(settings.enabled),
+              disabled: busy,
+              onClick: toggleEnabled,
+            }, settings.enabled ? '已启用（点此关闭）' : '已关闭（点此启用）'),
+          ),
+        ),
 
         h('div', { style: S.card },
           h('div', { style: S.title }, '显示方式'),

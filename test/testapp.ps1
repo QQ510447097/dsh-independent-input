@@ -19,7 +19,7 @@ $form.AutoScaleMode = 'None'
 $form.StartPosition = 'Manual'
 $form.Location = New-Object System.Drawing.Point(300, 300)
 $form.Size = New-Object System.Drawing.Size(460, 300)
-$form.TopMost = $true
+$form.TopMost = ($env:DSH_TESTAPP_BACKGROUND -ne '1')
 $form.ShowInTaskbar = $true
 
 $button = New-Object System.Windows.Forms.Button
@@ -48,7 +48,7 @@ $form.Controls.Add($textBox)
 $form.Controls.Add($readButton)
 
 $form.Add_Shown({
-  $form.Activate()
+  if ($env:DSH_TESTAPP_BACKGROUND -ne '1') { $form.Activate() }
   $bp = $button.PointToScreen((New-Object System.Drawing.Point(90, 20)))
   $tp = $textBox.PointToScreen((New-Object System.Drawing.Point(200, 14)))
   $rp = $readButton.PointToScreen((New-Object System.Drawing.Point(90, 20)))
