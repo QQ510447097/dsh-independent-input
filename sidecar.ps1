@@ -1740,6 +1740,15 @@ function Invoke-Request($req) {
         return @{ ok = $false; reason = 'target-hwnd-invalid'; hwnd = $targetHwnd }
       }
       $root = [DshInput]::RootOf($target)
+      $h = [DshInput]::ChildAt($root, $x, $y)
+      if ($h -eq [IntPtr]::Zero) { $h = $root }
+      $cls0 = [DshInput]::WindowClass($h)
+      if ($button -eq 'left' -and $count -eq 1 -and $cls0 -match 'BUTTON|Button') {
+        # BM_CLICK 直接让按钮发命令，不经过鼠标消息，也不抢焦点。
+        [DshInput]::PostMessage($h, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+        Show-StateAt 'link' $x $y
+        return @{ ok = $true; via = 'bm_click'; hwnd = [long]$h; target = [long]$root; verified = $false; note = '按钮 BM_CLICK；不移动鼠标、不抢焦点' }
+      }
       $r = Invoke-UiaClickInWindow $root $x $y
       if ($r.ok) {
         $state = if ($r.pattern -and ([string]$r.type -match 'Edit|Document|Text')) { 'text' } elseif ($r.pattern) { 'link' } else { 'pointer' }

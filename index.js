@@ -2,8 +2,7 @@
  * dsh-independent-input · 独立鼠标键盘
  *
  * 只做“输入”这一层：鼠标、键盘、滚轮、拖拽、截图定位。
- * 默认走 UIA / 窗口消息，不移动主人的真实光标、不抢键盘焦点；
- * 物理输入是显式回退；physical 允许和主人同时操作，只有显式暂停才停手。
+ * 默认走 UIA / 窗口消息，不移动主人的真实光标、不抢键盘焦点；physical 已禁用。
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -96,7 +95,8 @@ function resultText(action, r) {
     if (r.name) bits.push(`目标：${r.name}`)
     if (r.type) bits.push(`类型：${r.type}`)
     if (r.note) bits.push(r.note)
-    if (r.needsPhysical) bits.push('如果必须物理点击，明确传 mode:"physical"。')
+    if (r.needsPhysical) bits.push('不会退回 physical；请改用目标 hwnd 的其他窗口消息方式，或问主人。')
+    if (r.strictNoRealMouse || r.strictNoFocusSteal) bits.push('已严格禁止真实鼠标 / 抢焦点。')
     return bits.join('\n')
   }
   if (action === 'capture') {
@@ -115,21 +115,31 @@ function resultText(action, r) {
   if (via === 'uia') {
     return `UIA 已执行（${r.pattern || 'pattern'}）${r.name ? `：${r.name}` : ''}${r.type ? ` · ${r.type}` : ''}`
   }
+  if (via === 'bm_click') {
+    return `已向按钮发 BM_CLICK；没有移动鼠标，也没有抢焦点。`
+  }
+  if (via === 'uia-hwnd') {
+    return `目标窗口内 UIA 已执行（${r.pattern || 'pattern'}）${r.name ? `：${r.name}` : ''}${r.type ? ` · ${r.type}` : ''}`
+  }
   if (via === 'wm_settext') {
     return `已直接写入控件${r.verified ? '（已回读确认）' : ''}；没有移动光标，也没有抢焦点。`
   }
   if (via === 'uia-focus+physical') {
-    return `UIA 聚焦“${r.name || '目标'}”后用独立键盘输入；鼠标没有移动。`
+    return `physical 已禁用；这条回执不该出现，请检查版本。`
   }
   if (via === 'uia+message') {
-    return `UIA 没有可用模式，已改用窗口消息聚焦并输入${r.verified ? '（已确认）' : '（需截图确认）'}。`
+    return `已向目标窗口投递文字${r.verified ? '（已确认）' : '（需截图确认）'}；没有抢焦点。`
+  }
+  if (via === 'message-hwnd') {
+    const target = r.title ? `“${r.title}”` : (r.hwnd ? `hwnd ${r.hwnd}` : '目标')
+    return `已向 ${target} 投递窗口消息${r.verified ? '（已确认）' : '（不一定被处理，请截图确认）'}；没有动真实鼠标。`
   }
   if (via === 'message') {
     const target = r.title ? `“${r.title}”` : (r.hwnd ? `hwnd ${r.hwnd}` : '目标')
     return `窗口消息已投递给 ${target}${r.verified ? '（已确认）' : '（不一定被处理，请截图确认）'}。`
   }
   if (via === 'physical') {
-    return `物理输入完成；主人光标已还原。${r.note || ''}`
+    return `physical 已禁用；这条回执不该出现。`
   }
   return `已执行 ${action}：${JSON.stringify(r).slice(0, 600)}`
 }

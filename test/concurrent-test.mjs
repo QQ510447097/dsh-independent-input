@@ -53,6 +53,7 @@ try {
   const target = { x: meta.button.x, y: meta.button.y }
   const sc = new Sidecar(); await sc.start()
   const baseline = lines().length
+  const fgBefore = (await sc.request('status')).foreground.hwnd
   let landed = 0
   let jumps = 0
   const samples = []
@@ -67,6 +68,7 @@ try {
     await sleep(120)
   }
   const physBefore = (await sc.request('status')).cursor
+  const fgAfter = (await sc.request('status')).foreground.hwnd
   const phys = await sc.request('click', { x: target.x, y: target.y, mode: 'physical' })
   await sleep(250)
   const physAfter = (await sc.request('status')).cursor
@@ -76,6 +78,8 @@ try {
     autoClicks: 6,
     landed,
     jumps,
+    focusChanged: fgBefore !== fgAfter,
+    foreground: { before: fgBefore, after: fgAfter },
     samples,
     logButtonLines: log.filter((l) => l === 'button').length,
     baseline,
