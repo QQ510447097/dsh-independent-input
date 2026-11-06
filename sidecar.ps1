@@ -372,11 +372,6 @@ public static class DshInput
             if ((data.flags & LLMHF_INJECTED) == 0)
             {
                 TouchUserInput();
-                if (PhysicalActive)
-                {
-                    Paused = true;
-                    PauseReason = "user-mouse";
-                }
             }
         }
         return CallNextHookEx(mouseHook, nCode, wParam, lParam);
@@ -390,11 +385,6 @@ public static class DshInput
             if ((data.flags & LLKHF_INJECTED) == 0)
             {
                 TouchUserInput();
-                if (PhysicalActive)
-                {
-                    Paused = true;
-                    PauseReason = "user-keyboard";
-                }
             }
         }
         return CallNextHookEx(keyHook, nCode, wParam, lParam);
@@ -540,26 +530,9 @@ public static class DshInput
 
     static void CheckReadyForPhysical()
     {
+        // 主人和 AI 可以同时操作；只认显式暂停（Ctrl+Alt+Q / pause），
+        // 不再因为检测到主人在动鼠标键盘就拒绝 physical。
         if (Paused) throw new Exception("paused: " + PauseReason);
-        long hookLast = Interlocked.Read(ref lastUserInputTicks);
-        if (hookLast != 0)
-        {
-            long hookAge = (long)((DateTime.UtcNow.Ticks - hookLast) / TimeSpan.TicksPerMillisecond);
-            if (hookAge >= 0 && hookAge < UserActiveMs) throw new Exception("user-active");
-        }
-        long age = LastUserInputAgeMs();
-        if (age >= 0 && age < UserActiveMs)
-        {
-            long injected = Interlocked.Read(ref lastInjectedTick);
-            bool ownInjection = false;
-            if (injected != 0)
-            {
-                long now = (long)(GetTickCount64() & 0xFFFFFFFF);
-                long since = (now - injected) & 0xFFFFFFFF;
-                ownInjection = Math.Abs(age - since) <= 80;
-            }
-            if (!ownInjection) throw new Exception("user-active");
-        }
     }
 
     static void MoveRaw(int x, int y)

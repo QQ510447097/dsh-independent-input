@@ -65,10 +65,15 @@ try {
 
   await sc.request('setUserActiveMs', { ms: 5000 })
   await sc.request('simulateUserInput')
-  let refused = false
-  try { await sc.request('click', { x: meta.button.x, y: meta.button.y, mode: 'physical' }) }
-  catch (e) { refused = String(e.message).includes('user-active') }
-  check('user-active refusal', refused)
+  let allowedWhileActive = false
+  try {
+    const r = await sc.request('click', { x: meta.button.x, y: meta.button.y, mode: 'physical' })
+    allowedWhileActive = r.ok === true
+  } catch (e) {
+    allowedWhileActive = false
+    console.log('physical while active error:', e.message)
+  }
+  check('physical allowed while user active', allowedWhileActive)
   await sc.request('setUserActiveMs', { ms: 0 })
 
   // 用消息点击把焦点放进文本框（不移动光标），再用物理键盘输入。

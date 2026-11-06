@@ -3,7 +3,7 @@
  *
  * 只做“输入”这一层：鼠标、键盘、滚轮、拖拽、截图定位。
  * 默认走 UIA / 窗口消息，不移动主人的真实光标、不抢键盘焦点；
- * 物理输入是显式回退，主人一碰鼠标键盘就暂停并还原光标。
+ * 物理输入是显式回退；physical 允许和主人同时操作，只有显式暂停才停手。
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -149,7 +149,7 @@ function toolSpec() {
       + '光标外观按操作**自动切换**（默认 pointer、输入 text、可点元素 link、滚动 vert、拖拽 move/dgn1/dgn2、精确点击 cross、暂停 unavailiable、失败 help），不用手选。'
       + '运行中也可以 `overlay({cursorMode:"clean", cursorSize:96})` 切换；收工用 `overlay({show:false})` 收起。\n\n'
       + '安全规则：\n'
-      + '- 物理模式会短暂使用真实光标；主人一碰鼠标键盘就立刻暂停并把光标放回原处。\n'
+      + '- 物理模式会短暂使用真实光标；**主人在用键鼠不会自动暂停**，只有显式暂停才停手。\n'
       + '- 主人按 **Ctrl+Alt+Q** 随时暂停；下一次动作会返回 paused，必须停下。\n'
       + '- 不要用这个工具做破坏性操作（删文件、关窗口、支付），除非主人明确要求。\n\n'
       + 'actions: status / windows / capture / click / type / key / scroll / drag / move / pause / resume / overlay。',
